@@ -13,6 +13,11 @@
 #include "network/uv/ServerImpl.h"
 #include "storage/MapBasedGlobalLockImpl.h"
 
+#include <iostream>
+#include <fstream>
+
+#include <unistd.h>
+
 typedef struct {
     std::shared_ptr<Afina::Storage> storage;
     std::shared_ptr<Afina::Network::Server> server;
@@ -49,6 +54,8 @@ int main(int argc, char **argv) {
         options.add_options()("s,storage", "Type of storage service to use", cxxopts::value<std::string>());
         options.add_options()("n,network", "Type of network service to use", cxxopts::value<std::string>());
         options.add_options()("h,help", "Print usage info");
+        options.add_options()("d,daemon", "Run daemon");
+        options.add_options()("p,pid_print", "Print daemon pid to file", cxxopts::value<std::string>());
         options.parse(argc, argv);
 
         if (options.count("help") > 0) {
@@ -89,6 +96,45 @@ int main(int argc, char **argv) {
     } else {
         throw std::runtime_error("Unknown network type");
     }
+
+    if (options.count("daemon") > 0)
+      {
+        pid_t pid = ::fork ();
+        if (pid < 0)
+          {
+            std::cout << "Error forking!" << std::endl;
+            return 0;
+          }
+        else if (pid > 0)
+          {
+            std::cout << "Closing main process..." << std::endl;
+            return 0;
+          }
+
+        // child process here
+        if (::setsid () < 0)
+          {
+            printf ("Cannot setsid().\n");
+            return 0;
+          }
+
+        close(STDIN_FILENO);
+        close(STDOUT_FILENO);
+        close(STDERR_FILENO);
+      }
+
+    if (options.count("pid_print") > 0)
+      {
+        std::string filename = options["pid_print"].as<std::string>();
+        std::ofstream output_file_stream;
+        output_file_stream.open (filename.c_str ());
+        if (!output_file_stream.is_open ())
+          return 0;
+
+        auto pid_num = ::getpid ();
+        output_file_stream << pid_num << std::endl;
+        output_file_stream.close ();
+      }
 
     // Init local loop. It will react to signals and performs some metrics collections. Each
     // subsystem is able to push metrics actively, but some metrics could be collected only
