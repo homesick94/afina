@@ -5,6 +5,8 @@
 #include <mutex>
 #include <string>
 
+#include <list>
+
 #include <afina/Storage.h>
 
 namespace Afina {
@@ -41,6 +43,7 @@ private:
     size_t _max_size;
 
     std::map<std::string, std::string> _backend;
+    std::list<std::map<std::string, std::string>::iterator> lru_cache;
 };
 
 } // namespace Backend

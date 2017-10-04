@@ -49,3 +49,18 @@ TEST(StorageTest, PutIfAbsent) {
     EXPECT_TRUE(storage.Get("KEY1", value));
     EXPECT_TRUE(value == "val1");
 }
+
+TEST(StorageTest, OverFlowTest) {
+    MapBasedGlobalLockImpl storage (2);
+
+    storage.Put("KEY1", "val1");
+    storage.Put("KEY2", "val2");
+
+    // delete KEY1
+    storage.Put("KEY3", "val3");
+
+    std::string value;
+    EXPECT_FALSE(storage.Get("KEY1", value));
+    EXPECT_TRUE(storage.Get("KEY3", value));
+    EXPECT_TRUE(value == "val3");
+}
