@@ -9,15 +9,24 @@ class Simple;
 
 class Pointer {
 public:
-    Pointer();
+  Pointer() {}
 
+    Pointer(void *);
     Pointer(const Pointer &);
-    Pointer(Pointer &&);
+    Pointer(Pointer &&p);
 
     Pointer &operator=(const Pointer &);
     Pointer &operator=(Pointer &&);
 
-    void *get() const { return 0; }
+    void *get() const
+    {
+      if (descriptor == nullptr)
+        return nullptr;
+      return *(void**)descriptor;
+    }
+
+public:
+    void *descriptor = nullptr;
 };
 
 } // namespace Allocator

@@ -9,6 +9,7 @@ namespace Allocator {
 enum class AllocErrorType {
     InvalidFree,
     NoMemory,
+    NoValidPointer,
 };
 
 class AllocError : std::runtime_error {
