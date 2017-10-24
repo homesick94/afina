@@ -4,6 +4,7 @@
 #include <atomic>
 #include <vector>
 #include <pthread.h>
+#include <deque>
 
 #include <afina/network/Server.h>
 
@@ -68,7 +69,7 @@ private:
     // access only from inside of accept_thread
     std::vector<pthread_t> connections;
 
-    std::vector<std::atomic_bool> finished_workers;
+    std::deque<std::atomic_bool> finished_workers;
     std::vector<single_worker> connection_workers;
 };
 

@@ -20,6 +20,7 @@
 
 #include <afina/Storage.h>
 #include <protocol/Parser.h>
+#include <afina/execute/Command.h>
 
 namespace Afina {
 namespace Network {
@@ -39,7 +40,11 @@ void *ServerImpl::RunConnectionProxy (void *p)
 {
   single_worker *worker = (single_worker*)p;
 
-  worker->parent_server->RunConnection (worker->socket, worker->idx);
+  try {
+    worker->parent_server->RunConnection (worker->socket, worker->idx);
+  } catch (std::runtime_error &ex) {
+      std::cerr << "Server fails: " << ex.what() << std::endl;
+  }
 }
 
 // See Server.h
@@ -171,6 +176,14 @@ void ServerImpl::RunAcceptor() {
     int client_socket;
     struct sockaddr_in client_addr;
     socklen_t sinSize = sizeof(struct sockaddr_in);
+
+    // fill finished_workers
+    for (int i = 0; i < max_workers; i++)
+      finished_workers.emplace_back (true);
+
+    connection_workers.reserve (max_workers);
+    connections.resize (max_workers);
+
     while (running.load()) {
         std::cout << "network debug: waiting for connection..." << std::endl;
 
@@ -213,7 +226,6 @@ void ServerImpl::RunAcceptor() {
                   throw std::runtime_error("Cannot create thread for worker");
                 }
             }
-          close(client_socket);
         }
       }
 
@@ -231,7 +243,7 @@ void ServerImpl::RunConnection (int socket, int idx)
       int buf_size = 1024;
       char buf[buf_size];
       std::string command_str;
-      size_t body_size = -1; // special value
+      size_t body_size = 0; // special value
 
       Protocol::Parser parser;
       bool parsed_succesfully = false;
@@ -242,33 +254,36 @@ void ServerImpl::RunConnection (int socket, int idx)
           if (bytes_num < 0)
             {
               close (socket);
+              finished_workers[idx].store (true);
               return; // return bad result
             }
           if (bytes_num == 0)
             {
-              finished_workers[idx].stor (true);
+              close (socket);
+              finished_workers[idx].store (true);
               return; // return good result
             }
           command_str += std::string (buf, bytes_num);
           parsed_succesfully = parser.Parse (command_str.c_str (), body_size);
-          command_str = command_str.substr (body_size, buf.size() - body_size);
+          command_str = command_str.substr (body_size, command_str.size() - body_size);
         }
 
       uint32_t size_to_command = 0;
       std::unique_ptr<Execute::Command> executed_command = parser.Build (size_to_command);
 
       // read args
-      std::string args;
       while (command_str.size () < size_to_command)
         {
           int bytes_num = recv (socket, buf, buf_size, 0); // mb read instead
           if (bytes_num < 0)
             {
               close (socket);
+              finished_workers[idx].store (true);
               return; // return bad result
             }
           if (bytes_num == 0)
             {
+              close (socket);
               finished_workers[idx].store (true);
               return; // return good result
             }
@@ -278,25 +293,27 @@ void ServerImpl::RunConnection (int socket, int idx)
       std::string output;
 
       try {
-        executed_command->Execute(*pStorage, args.substr(0, body_size), output);
-        if (send (sock, output.data(), output.size(), 0) <= 0)
+        executed_command->Execute(*pStorage, command_str.substr(0, size_to_command), output);
+        if (send (socket, output.data(), output.size(), 0) <= 0)
           {
-            close (sock);
+            close (socket);
             finished_workers[idx].store(true);
             return;
           }
       } catch (std::runtime_error &ex) {
         std::string error = std::string("SERVER_ERROR ") + ex.what() + "\n";
-        if (send (sock, error.data (), error.size (), 0) <= 0)
+        if (send (socket, error.data (), error.size (), 0) <= 0)
           {
-            close (sock);
+            close (socket);
             finished_workers[idx].store (true);
             return;
           }
       }
+      command_str = command_str.substr (size_to_command, command_str.size() - size_to_command);
     }
-  close (sock);
+  close (socket);
   finished_workers[idx].store (true);
+}
 
 } // namespace Blocking
 } // namespace Network
