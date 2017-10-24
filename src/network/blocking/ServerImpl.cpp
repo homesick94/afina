@@ -5,6 +5,7 @@
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <algorithm>
 
 #include <pthread.h>
 #include <signal.h>
@@ -18,6 +19,7 @@
 #include <unistd.h>
 
 #include <afina/Storage.h>
+#include <protocol/Parser.h>
 
 namespace Afina {
 namespace Network {
@@ -31,6 +33,13 @@ void *ServerImpl::RunAcceptorProxy(void *p) {
         std::cerr << "Server fails: " << ex.what() << std::endl;
     }
     return 0;
+}
+
+void *ServerImpl::RunConnectionProxy (void *p)
+{
+  single_worker *worker = (single_worker*)p;
+
+  worker->parent_server->RunConnection (worker->socket, worker->idx);
 }
 
 // See Server.h
@@ -57,6 +66,8 @@ void ServerImpl::Start(uint32_t port, uint16_t n_workers) {
     // variable value visibility
     max_workers = n_workers;
     listen_port = port;
+
+
 
     // The pthread_create function creates a new thread.
     //
@@ -172,22 +183,120 @@ void ServerImpl::RunAcceptor() {
 
         // TODO: Start new thread and process data from/to connection
         {
-            std::string msg = "TODO: start new thread and process memcached protocol instead";
-            if (send(client_socket, msg.data(), msg.size(), 0) <= 0) {
-                close(client_socket);
-                close(server_socket);
-                throw std::runtime_error("Socket send() failed");
+
+          auto finished_it = std::find_if (finished_workers.begin (), finished_workers.end (),
+                                           [](const std::atomic_bool &p)
+                                           {
+                                             return p.load ();
+                                           });
+
+          if (finished_it == finished_workers.end ())
+            {
+              std::string msg = "All workers are busy";
+              if (send(client_socket, msg.data(), msg.size(), 0) <= 0) {
+                  close(client_socket);
+                  close(server_socket);
+                  throw std::runtime_error("Socket send() failed");
+              }
+              close (client_socket);
             }
-            close(client_socket);
+          else
+            {
+              int free_worker_offset = finished_it - finished_workers.begin ();
+              connection_workers[free_worker_offset] = single_worker (this, client_socket, free_worker_offset);
+              finished_workers[free_worker_offset].store (false);
+
+              // init thread for worker
+              if (pthread_create(&connections[free_worker_offset], NULL, ServerImpl::RunConnectionProxy,
+                                 &connection_workers[free_worker_offset]) < 0)
+                {
+                  throw std::runtime_error("Cannot create thread for worker");
+                }
+            }
+          close(client_socket);
         }
-    }
+      }
 
     // Cleanup on exit...
     close(server_socket);
 }
 
 // See Server.h
-void ServerImpl::RunConnection() { std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl; }
+void ServerImpl::RunConnection (int socket, int idx)
+{
+  std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
+
+  while (running.load ())
+    {
+      int buf_size = 1024;
+      char buf[buf_size];
+      std::string command_str;
+      size_t body_size = -1; // special value
+
+      Protocol::Parser parser;
+      bool parsed_succesfully = false;
+
+      while (!parsed_succesfully)
+        {
+          int bytes_num = recv (socket, buf, buf_size, 0); // mb read instead
+          if (bytes_num < 0)
+            {
+              close (socket);
+              return; // return bad result
+            }
+          if (bytes_num == 0)
+            {
+              finished_workers[idx].stor (true);
+              return; // return good result
+            }
+          command_str += std::string (buf, bytes_num);
+          parsed_succesfully = parser.Parse (command_str.c_str (), body_size);
+          command_str = command_str.substr (body_size, buf.size() - body_size);
+        }
+
+      uint32_t size_to_command = 0;
+      std::unique_ptr<Execute::Command> executed_command = parser.Build (size_to_command);
+
+      // read args
+      std::string args;
+      while (command_str.size () < size_to_command)
+        {
+          int bytes_num = recv (socket, buf, buf_size, 0); // mb read instead
+          if (bytes_num < 0)
+            {
+              close (socket);
+              return; // return bad result
+            }
+          if (bytes_num == 0)
+            {
+              finished_workers[idx].store (true);
+              return; // return good result
+            }
+          command_str += std::string (buf, bytes_num);
+        }
+
+      std::string output;
+
+      try {
+        executed_command->Execute(*pStorage, args.substr(0, body_size), output);
+        if (send (sock, output.data(), output.size(), 0) <= 0)
+          {
+            close (sock);
+            finished_workers[idx].store(true);
+            return;
+          }
+      } catch (std::runtime_error &ex) {
+        std::string error = std::string("SERVER_ERROR ") + ex.what() + "\n";
+        if (send (sock, error.data (), error.size (), 0) <= 0)
+          {
+            close (sock);
+            finished_workers[idx].store (true);
+            return;
+          }
+      }
+    }
+  close (sock);
+  finished_workers[idx].store (true);
 
 } // namespace Blocking
 } // namespace Network

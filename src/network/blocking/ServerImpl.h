@@ -15,6 +15,9 @@ namespace Blocking {
  * # Network resource manager implementation
  * Server that is spawning a separate thread for each connection
  */
+
+struct single_worker;
+
 class ServerImpl : public Server {
 public:
     ServerImpl(std::shared_ptr<Afina::Storage> ps);
@@ -36,15 +39,15 @@ protected:
     void RunAcceptor();
 
     /**
-     * Methos is running for each connection
+     * Method is running for each connection
      */
-    void RunConnection();
+    void RunConnection(int socket, int idx);
 
 private:
     static void *RunAcceptorProxy(void *p);
-
+    static void *RunConnectionProxy(void *p);
     // Atomic flag to notify threads when it is time to stop. Note that
-    // flag must be atomic in order to safely publisj changes cross thread
+    // flag must be atomic in order to safely publish changes cross thread
     // bounds
     std::atomic<bool> running;
 
@@ -64,6 +67,21 @@ private:
     // Threads that are processing connection data, permits
     // access only from inside of accept_thread
     std::vector<pthread_t> connections;
+
+    std::vector<std::atomic_bool> finished_workers;
+    std::vector<single_worker> connection_workers;
+};
+
+// struct for pthread
+struct single_worker
+{
+  ServerImpl *parent_server = nullptr;
+  int socket = -1;
+  int idx = -1;
+
+  single_worker (ServerImpl *serv, int sock, int i) : parent_server (serv), socket (sock), idx (i)
+  {
+  }
 };
 
 } // namespace Blocking
