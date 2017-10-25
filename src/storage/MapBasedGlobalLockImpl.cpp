@@ -9,7 +9,7 @@ namespace Backend {
 bool MapBasedGlobalLockImpl::Put(const std::string &key, const std::string &value) {
     std::unique_lock<std::mutex> guard(_lock);
 
-    if (_backend.size () + 1 == _max_size)
+    if (_backend.size () == _max_size)
       {
         auto last_element = lru_cache.back ();
         _backend.erase (last_element);
