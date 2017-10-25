@@ -43,9 +43,9 @@ bool MapBasedGlobalLockImpl::PutIfAbsent(const std::string &key, const std::stri
       {
         guard.unlock ();
         Put (key, value);
+        return true;
       }
-
-    return true;
+    return false;
 }
 
 // See MapBasedGlobalLockImpl.h

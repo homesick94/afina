@@ -238,14 +238,16 @@ void ServerImpl::RunConnection (int socket, int idx)
 {
   std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
 
+  Protocol::Parser parser;
   while (running.load ())
     {
+      parser.Reset ();
+
       int buf_size = 1024;
       char buf[buf_size];
       std::string command_str;
       size_t body_size = 0; // special value
 
-      Protocol::Parser parser;
       bool parsed_succesfully = false;
 
       while (!parsed_succesfully)
@@ -294,6 +296,7 @@ void ServerImpl::RunConnection (int socket, int idx)
 
       try {
         executed_command->Execute(*pStorage, command_str.substr(0, size_to_command), output);
+        output += "\r\n";
         if (send (socket, output.data(), output.size(), 0) <= 0)
           {
             close (socket);
