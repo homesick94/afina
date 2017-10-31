@@ -7,3 +7,24 @@ generated/*
 
 # local config use to test changes
 config/_local.conf
+
+# makefiles
+
+*.make
+*.cmake
+*.internal
+*.o
+*link.txt
+*.includecache
+*.marks
+Makefile
+*.a
+*.txt.user
+*.check_cache
+*.c
+*.cxx
+CMakeFiles/*
+CMakeCache.txt
+src/Version.cpp
+*afina
+test/*/run*
