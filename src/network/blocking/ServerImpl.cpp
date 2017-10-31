@@ -182,7 +182,6 @@ void ServerImpl::RunAcceptor() {
       finished_workers.emplace_back (true);
 
     connection_workers.reserve (max_workers);
-    connections.resize (max_workers);
 
     while (running.load()) {
         std::cout << "network debug: waiting for connection..." << std::endl;
@@ -231,12 +230,47 @@ void ServerImpl::RunAcceptor() {
 
     // Cleanup on exit...
     close(server_socket);
+
+    // Wait until for all connections to be complete
+    std::unique_lock<std::mutex> __lock(connections_mutex);
+    while (!connections.empty()) {
+        connections_cv.wait(__lock);
+    }
 }
 
 // See Server.h
 void ServerImpl::RunConnection (int socket, int idx)
 {
   std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
+  pthread_t self = pthread_self();
+
+  // Thread just spawn, register itself as a connection
+  {
+    std::unique_lock<std::mutex> __lock(connections_mutex);
+    connections.insert(self);
+  }
+
+  // TODO: All connection work is here
+
+  // Thread is about to stop, remove self from list of connections
+  // and it was the very last one, notify main thread
+  {
+    std::unique_lock<std::mutex> __lock(connections_mutex);
+    auto pos = connections.find(self);
+
+    assert(pos != connections.end());
+    connections.erase(pos);
+
+    if (connections.empty()) {
+        // Better to unlock before notify in order to let notified thread
+        // hold the mutex. Otherwise notification might be skipped
+        __lock.unlock();
+
+        // We are pretty sure that only ONE thread is waiting for connections
+        // queue to be empty - main thread
+        connections_cv.notify_one();
+      }
+  }
 
   Protocol::Parser parser;
   while (running.load ())
