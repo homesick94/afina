@@ -72,8 +72,6 @@ void ServerImpl::Start(uint32_t port, uint16_t n_workers) {
     max_workers = n_workers;
     listen_port = port;
 
-
-
     // The pthread_create function creates a new thread.
     //
     // The first parameter is a pointer to a pthread_t variable, which we can use
@@ -179,7 +177,7 @@ void ServerImpl::RunAcceptor() {
 
     // fill finished_workers
     for (int i = 0; i < max_workers; i++)
-      finished_workers.emplace_back (true);
+      finished_workers.push_back (true);
 
     connection_workers.reserve (max_workers);
 
@@ -195,14 +193,7 @@ void ServerImpl::RunAcceptor() {
 
         // TODO: Start new thread and process data from/to connection
         {
-
-          auto finished_it = std::find_if (finished_workers.begin (), finished_workers.end (),
-                                           [](const std::atomic_bool &p)
-                                           {
-                                             return p.load ();
-                                           });
-
-          if (finished_it == finished_workers.end ())
+          if (connections.size () == max_workers)
             {
               std::string msg = "All workers are busy";
               if (send(client_socket, msg.data(), msg.size(), 0) <= 0) {
@@ -214,13 +205,12 @@ void ServerImpl::RunAcceptor() {
             }
           else
             {
-              int free_worker_offset = finished_it - finished_workers.begin ();
-              connection_workers[free_worker_offset] = single_worker (this, client_socket, free_worker_offset);
-              finished_workers[free_worker_offset].store (false);
+              pthread_t new_worker_thread;
 
+              single_worker worker (this, client_socket);
               // init thread for worker
-              if (pthread_create(&connections[free_worker_offset], NULL, ServerImpl::RunConnectionProxy,
-                                 &connection_workers[free_worker_offset]) < 0)
+              if (pthread_create(&new_worker_thread, NULL, ServerImpl::RunConnectionProxy,
+                                 &worker) < 0)
                 {
                   throw std::runtime_error("Cannot create thread for worker");
                 }
@@ -250,8 +240,86 @@ void ServerImpl::RunConnection (int socket, int idx)
     connections.insert(self);
   }
 
-  // TODO: All connection work is here
+  {
+    // TODO: All connection work is here
+    Protocol::Parser parser;
+    while (running.load ())
+      {
+        parser.Reset ();
 
+        int buf_size = 1024;
+        char buf[buf_size];
+        std::string command_str;
+        size_t body_size = 0; // special value
+
+        bool parsed_succesfully = false;
+
+        while (!parsed_succesfully)
+          {
+            int bytes_num = recv (socket, buf, buf_size, 0); // mb read instead
+            if (bytes_num < 0)
+              {
+                close (socket);
+                finished_workers[idx].store (true);
+                return; // return bad result
+              }
+            if (bytes_num == 0)
+              {
+                close (socket);
+                finished_workers[idx].store (true);
+                return; // return good result
+              }
+            command_str += std::string (buf, bytes_num);
+            parsed_succesfully = parser.Parse (command_str.c_str (), body_size);
+            command_str = command_str.substr (body_size, command_str.size() - body_size);
+          }
+
+        uint32_t size_to_command = 0;
+        std::unique_ptr<Execute::Command> executed_command = parser.Build (size_to_command);
+
+        // read args
+        while (command_str.size () < size_to_command)
+          {
+            int bytes_num = recv (socket, buf, buf_size, 0); // mb read instead
+            if (bytes_num < 0)
+              {
+                close (socket);
+                finished_workers[idx].store (true);
+                return; // return bad result
+              }
+            if (bytes_num == 0)
+              {
+                close (socket);
+                finished_workers[idx].store (true);
+                return; // return good result
+              }
+            command_str += std::string (buf, bytes_num);
+          }
+
+        std::string output;
+
+        try {
+          executed_command->Execute(*pStorage, command_str.substr(0, size_to_command), output);
+          output += "\r\n";
+          if (send (socket, output.data(), output.size(), 0) <= 0)
+            {
+              close (socket);
+              finished_workers[idx].store(true);
+              return;
+            }
+        } catch (std::runtime_error &ex) {
+          std::string error = std::string("SERVER_ERROR ") + ex.what() + "\n";
+          if (send (socket, error.data (), error.size (), 0) <= 0)
+            {
+              close (socket);
+              finished_workers[idx].store (true);
+              return;
+            }
+        }
+        command_str = command_str.substr (size_to_command, command_str.size() - size_to_command);
+      }
+
+  }
   // Thread is about to stop, remove self from list of connections
   // and it was the very last one, notify main thread
   {
@@ -272,82 +340,7 @@ void ServerImpl::RunConnection (int socket, int idx)
       }
   }
 
-  Protocol::Parser parser;
-  while (running.load ())
-    {
-      parser.Reset ();
 
-      int buf_size = 1024;
-      char buf[buf_size];
-      std::string command_str;
-      size_t body_size = 0; // special value
-
-      bool parsed_succesfully = false;
-
-      while (!parsed_succesfully)
-        {
-          int bytes_num = recv (socket, buf, buf_size, 0); // mb read instead
-          if (bytes_num < 0)
-            {
-              close (socket);
-              finished_workers[idx].store (true);
-              return; // return bad result
-            }
-          if (bytes_num == 0)
-            {
-              close (socket);
-              finished_workers[idx].store (true);
-              return; // return good result
-            }
-          command_str += std::string (buf, bytes_num);
-          parsed_succesfully = parser.Parse (command_str.c_str (), body_size);
-          command_str = command_str.substr (body_size, command_str.size() - body_size);
-        }
-
-      uint32_t size_to_command = 0;
-      std::unique_ptr<Execute::Command> executed_command = parser.Build (size_to_command);
-
-      // read args
-      while (command_str.size () < size_to_command)
-        {
-          int bytes_num = recv (socket, buf, buf_size, 0); // mb read instead
-          if (bytes_num < 0)
-            {
-              close (socket);
-              finished_workers[idx].store (true);
-              return; // return bad result
-            }
-          if (bytes_num == 0)
-            {
-              close (socket);
-              finished_workers[idx].store (true);
-              return; // return good result
-            }
-          command_str += std::string (buf, bytes_num);
-        }
-
-      std::string output;
-
-      try {
-        executed_command->Execute(*pStorage, command_str.substr(0, size_to_command), output);
-        output += "\r\n";
-        if (send (socket, output.data(), output.size(), 0) <= 0)
-          {
-            close (socket);
-            finished_workers[idx].store(true);
-            return;
-          }
-      } catch (std::runtime_error &ex) {
-        std::string error = std::string("SERVER_ERROR ") + ex.what() + "\n";
-        if (send (socket, error.data (), error.size (), 0) <= 0)
-          {
-            close (socket);
-            finished_workers[idx].store (true);
-            return;
-          }
-      }
-      command_str = command_str.substr (size_to_command, command_str.size() - size_to_command);
-    }
   close (socket);
   finished_workers[idx].store (true);
 }

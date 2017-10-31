@@ -5,7 +5,6 @@
 #include <condition_variable>
 #include <mutex>
 #include <pthread.h>
-#include <deque>
 #include <unordered_set>
 
 #include <afina/network/Server.h>
@@ -79,7 +78,7 @@ private:
 
     std::unordered_set<pthread_t> connections;
 
-    std::deque<std::atomic_bool> finished_workers;
+    std::vector<bool> finished_workers;
     std::vector<single_worker> connection_workers;
 };
 
@@ -88,7 +87,6 @@ struct single_worker
 {
   ServerImpl *parent_server = nullptr;
   int socket = -1;
-  int idx = -1;
 
   single_worker (ServerImpl *serv, int sock, int i) : parent_server (serv), socket (sock), idx (i)
   {
