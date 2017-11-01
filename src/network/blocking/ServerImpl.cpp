@@ -38,19 +38,184 @@ void *ServerImpl::RunAcceptorProxy(void *p) {
 
 void *ServerImpl::RunConnectionProxy (void *p)
 {
-  single_worker *worker = (single_worker*)p;
+  ServerImpl *srv = reinterpret_cast<ServerImpl *>(p);
 
   try {
-    worker->parent_server->RunConnection (worker->socket);
+    srv->RunConnection ();
   } catch (std::runtime_error &ex) {
       std::cerr << "Server fails: " << ex.what() << std::endl;
   }
 }
 
-void ServerImpl::run_parser(int socket)
+void ServerImpl::run_parser (int socket)
 {
+  int buf_len = 1024;
+  char buf[buf_len];
+  std::string command_str;
 
+  Protocol::Parser pr;
+  while (running.load())
+    {
+      size_t parsed = 0;
+      size_t prev_parsed = 0;
+      pr.Reset();
+
+      bool was_parsed = false;
+      while (!was_parsed)
+        {
+          int res = read (socket, buf, buf_len);
+          if (res < 0)
+            {
+              close (socket);
+              return;
+            }
+
+          if (res == 0 && command_str.size() == 0)
+            {
+              close(socket);
+              return;
+            }
+
+          command_str += std::string(buf, res);
+          if (command_str.size() >= 2 && command_str[0] == '\r' && command_str[1] == '\n')
+            command_str = command_str.substr(2, command_str.size() - 2);
+
+          try {
+            was_parsed = pr.Parse(command_str, parsed);
+          } catch (std::runtime_error &ex) {
+            std::string error = std::string("SERVER_ERROR ") + ex.what() + "\n";
+            if (send(socket, error.data(), error.size(), 0) <= 0)
+              {
+                close(socket);
+                return;
+              }
+
+            close(socket);
+            return;
+          }
+
+          command_str = command_str.substr (parsed - prev_parsed, command_str.size() - parsed + prev_parsed);
+          prev_parsed = parsed;
+        }
+
+      uint32_t command_size = 0;
+      std::unique_ptr<Execute::Command> command = pr.Build(command_size);
+      while (command_str.size() < command_size)
+        {
+          int res = recv(socket, buf, buf_len, 0);
+          if (res < 0)
+            {
+              close(socket);
+              return;
+            }
+          command_str += std::string(buf, res);
+        }
+
+      std::string out;
+
+      try {
+        command->Execute(*pStorage, command_str.substr(0, command_size), out);
+        out += "\r\n";
+        if (send(socket, out.data(), out.size(), 0) <= 0)
+          {
+            close(socket);
+            return;
+          }
+
+      } catch (std::runtime_error &ex) {
+        std::string error = std::string("SERVER_ERROR ") + ex.what() + "\n";
+        if (send(socket, error.data(), error.size(), 0) <= 0)
+          {
+            close(socket);
+            return;
+          }
+      }
+      command_str = command_str.substr (command_size, command_str.size() - command_size);
+    }
+
+  close(socket);
 }
+
+//void ServerImpl::run_parser (int socket)
+//{
+//  Protocol::Parser parser;
+//  while (running.load ())
+//    {
+//      parser.Reset ();
+
+//      int buf_size = 1024;
+//      char buf[buf_size];
+//      std::string command_str;
+//      size_t body_size = 0; // special value
+
+//      bool parsed_succesfully = false;
+
+//      while (!parsed_succesfully)
+//        {
+//          int bytes_num = recv (socket, buf, buf_size, 0); // mb read instead
+//          if (bytes_num < 0)
+//            {
+//              close (socket);
+//              return; // return bad result
+//            }
+//          if (bytes_num == 0)
+//            {
+//              close (socket);
+//              return; // return good result
+//            }
+//          command_str += std::string (buf, bytes_num);
+//          parsed_succesfully = parser.Parse (command_str.c_str (), body_size);
+//          command_str = command_str.substr (body_size, command_str.size() - body_size);
+//          if (command_str.size() >= 2 && command_str[0] == '\r' && command_str[1] == '\n')
+//            command_str = command_str.substr(2, command_str.size() - 2);
+//        }
+
+//      uint32_t size_to_command = 0;
+//      std::unique_ptr<Execute::Command> executed_command = parser.Build (size_to_command);
+
+//      // read args
+//      while (command_str.size () < size_to_command)
+//        {
+//          int bytes_num = recv (socket, buf, buf_size, 0); // mb read instead
+//          if (bytes_num < 0)
+//            {
+//              close (socket);
+//              return; // return bad result
+//            }
+//          if (bytes_num == 0)
+//            {
+//              close (socket);
+//              return; // return good result
+//            }
+//          command_str += std::string (buf, bytes_num);
+//        }
+
+//      std::string output;
+
+//      try {
+//        executed_command->Execute(*pStorage, command_str.substr(0, size_to_command), output);
+//        output += "\r\n";
+//        if (send (socket, output.data(), output.size(), 0) <= 0)
+//          {
+//            close (socket);
+//            return;
+//          }
+//      } catch (std::runtime_error &ex) {
+//        std::string error = std::string("SERVER_ERROR ") + ex.what() + "\n";
+//        if (send (socket, error.data (), error.size (), 0) <= 0)
+//          {
+//            close (socket);
+//            return;
+//          }
+//      }
+//      //command_str = command_str.substr (size_to_command, command_str.size() - size_to_command);
+
+//      if (command_str.size() >= 2 && command_str[0] == '\r' && command_str[1] == '\n')
+//        command_str = command_str.substr(2, command_str.size() - 2);
+//      command_str = command_str.substr(size_to_command, command_str.size() - size_to_command);
+//    }
+//  close (socket);
+//}
 
 // See Server.h
 ServerImpl::ServerImpl(std::shared_ptr<Afina::Storage> ps) : Server(ps) {}
@@ -209,18 +374,19 @@ void ServerImpl::RunAcceptor() {
               close(client_socket);
               continue;
             }
-          else
-            {
-              std::unique_lock<std::mutex> __lock(sock_mutex);
-              pthread_t new_worker_thread;
 
-              // init thread for worker
-              if (pthread_create(&new_worker_thread, NULL, ServerImpl::RunConnectionProxy, this) < 0)
-                {
-                  throw std::runtime_error("Cannot create thread for worker");
-                }
-              connection_workers[new_worker_thread] = single_worker (this, client_socket);
-            }
+          {
+            std::unique_lock<std::mutex> __lock(sock_mutex);
+            pthread_t new_worker_thread;
+
+            // init thread for worker
+            if (pthread_create(&new_worker_thread, NULL, ServerImpl::RunConnectionProxy, this) < 0)
+              {
+                throw std::runtime_error("Cannot create thread for worker");
+              }
+            connection_workers[new_worker_thread] = client_socket;
+            connections.insert (new_worker_thread);
+          }
         }
       }
 
@@ -229,7 +395,8 @@ void ServerImpl::RunAcceptor() {
 
     // Wait until for all connections to be complete
     std::unique_lock<std::mutex> __lock(connections_mutex);
-    while (!connections.empty()) {
+    while (!connections.empty())
+    {
         connections_cv.wait(__lock);
     }
 }
@@ -240,86 +407,16 @@ void ServerImpl::RunConnection ()
   std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
   pthread_t self = pthread_self();
 
-  // Thread just spawn, register itself as a connection
+  int socket_num;
   {
-    std::unique_lock<std::mutex> __lock(connections_mutex);
-    connections.insert(self);
+    std::unique_lock<std::mutex> __lock(sock_mutex);
+    socket_num = connection_workers[self];
   }
 
-  {
-    // TODO: All connection work is here
-    Protocol::Parser parser;
-    int socket = connection_workers[self];
-    while (running.load ())
-      {
-        parser.Reset ();
+  std::cout << "Begin parsing\n";
+  // TODO: All connection work is here
+  run_parser (socket_num);
 
-        int buf_size = 1024;
-        char buf[buf_size];
-        std::string command_str;
-        size_t body_size = 0; // special value
-
-        bool parsed_succesfully = false;
-
-        while (!parsed_succesfully)
-          {
-            int bytes_num = recv (socket, buf, buf_size, 0); // mb read instead
-            if (bytes_num < 0)
-              {
-                close (socket);
-                return; // return bad result
-              }
-            if (bytes_num == 0)
-              {
-                close (socket);
-                return; // return good result
-              }
-            command_str += std::string (buf, bytes_num);
-            parsed_succesfully = parser.Parse (command_str.c_str (), body_size);
-            command_str = command_str.substr (body_size, command_str.size() - body_size);
-          }
-
-        uint32_t size_to_command = 0;
-        std::unique_ptr<Execute::Command> executed_command = parser.Build (size_to_command);
-
-        // read args
-        while (command_str.size () < size_to_command)
-          {
-            int bytes_num = recv (socket, buf, buf_size, 0); // mb read instead
-            if (bytes_num < 0)
-              {
-                close (socket);
-                return; // return bad result
-              }
-            if (bytes_num == 0)
-              {
-                close (socket);
-                return; // return good result
-              }
-            command_str += std::string (buf, bytes_num);
-          }
-
-        std::string output;
-
-        try {
-          executed_command->Execute(*pStorage, command_str.substr(0, size_to_command), output);
-          output += "\r\n";
-          if (send (socket, output.data(), output.size(), 0) <= 0)
-            {
-              close (socket);
-              return;
-            }
-        } catch (std::runtime_error &ex) {
-          std::string error = std::string("SERVER_ERROR ") + ex.what() + "\n";
-          if (send (socket, error.data (), error.size (), 0) <= 0)
-            {
-              close (socket);
-              return;
-            }
-        }
-        command_str = command_str.substr (size_to_command, command_str.size() - size_to_command);
-      }
-  }
   // Thread is about to stop, remove self from list of connections
   // and it was the very last one, notify main thread
   {
@@ -339,8 +436,6 @@ void ServerImpl::RunConnection ()
         connections_cv.notify_one();
       }
   }
-
-  close (socket);
 }
 
 } // namespace Blocking

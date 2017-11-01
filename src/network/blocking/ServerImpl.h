@@ -44,7 +44,7 @@ protected:
     /**
      * Method is running for each connection
      */
-    void RunConnection(int socket);
+    void RunConnection();
 
 private:
     static void *RunAcceptorProxy(void *p);
