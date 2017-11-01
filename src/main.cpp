@@ -13,6 +13,7 @@
 #include "network/nonblocking/ServerImpl.h"
 #include "network/uv/ServerImpl.h"
 #include "storage/MapBasedGlobalLockImpl.h"
+#include <afina/Executor.h>
 
 #include <iostream>
 #include <fstream>
@@ -56,6 +57,7 @@ int main(int argc, char **argv) {
         options.add_options()("n,network", "Type of network service to use", cxxopts::value<std::string>());
         options.add_options()("h,help", "Print usage info");
         options.add_options()("d,daemon", "Run daemon");
+        options.add_options()("t,pool_thread", "Run pool thread", cxxopts::value<int> ());
         options.add_options()("p,pid_print", "Print daemon pid to file", cxxopts::value<std::string>());
         options.parse(argc, argv);
 
@@ -137,6 +139,31 @@ int main(int argc, char **argv) {
         auto pid_num = ::getpid ();
         output_file_stream << pid_num << std::endl;
         output_file_stream.close ();
+      }
+
+    if (options.count("pool_thread") > 0)
+      {
+        int threads_count = options["pool_thread"].as<int>();
+        Afina::Executor executor ("pool", threads_count);
+
+        auto func1 = [](){ std::cout << "Func 1 " << std::endl; };
+        auto func2 = [](){ std::cout << "Func 2 " << std::endl; };
+        auto func3 = [](){ std::cout << "Func 3 " << std::endl; };
+        auto func4 = [](){ std::cout << "Func 4 " << std::endl; };
+
+//        std::cout << executor.Execute (func1) << std::endl;
+//        std::cout << executor.Execute (func2) << std::endl;
+//        std::cout << executor.Execute (func3) << std::endl;
+//        std::cout << executor.Execute (func4) << std::endl;
+
+        executor.Execute (func1);
+        executor.Execute (func2);
+        executor.Execute (func3);
+        executor.Execute (func4);
+
+        executor.Stop(true);
+
+        return 0;
       }
 
     // Init local loop. It will react to signals and performs some metrics collections. Each
