@@ -41,7 +41,7 @@ void *ServerImpl::RunConnectionProxy (void *p)
   single_worker *worker = (single_worker*)p;
 
   try {
-    worker->parent_server->RunConnection (worker->socket, worker->idx);
+    worker->parent_server->RunConnection (worker->socket);
   } catch (std::runtime_error &ex) {
       std::cerr << "Server fails: " << ex.what() << std::endl;
   }
@@ -229,7 +229,7 @@ void ServerImpl::RunAcceptor() {
 }
 
 // See Server.h
-void ServerImpl::RunConnection (int socket, int idx)
+void ServerImpl::RunConnection (int socket)
 {
   std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
   pthread_t self = pthread_self();
@@ -260,13 +260,11 @@ void ServerImpl::RunConnection (int socket, int idx)
             if (bytes_num < 0)
               {
                 close (socket);
-                finished_workers[idx].store (true);
                 return; // return bad result
               }
             if (bytes_num == 0)
               {
                 close (socket);
-                finished_workers[idx].store (true);
                 return; // return good result
               }
             command_str += std::string (buf, bytes_num);
@@ -284,13 +282,11 @@ void ServerImpl::RunConnection (int socket, int idx)
             if (bytes_num < 0)
               {
                 close (socket);
-                finished_workers[idx].store (true);
                 return; // return bad result
               }
             if (bytes_num == 0)
               {
                 close (socket);
-                finished_workers[idx].store (true);
                 return; // return good result
               }
             command_str += std::string (buf, bytes_num);
@@ -304,7 +300,6 @@ void ServerImpl::RunConnection (int socket, int idx)
           if (send (socket, output.data(), output.size(), 0) <= 0)
             {
               close (socket);
-              finished_workers[idx].store(true);
               return;
             }
         } catch (std::runtime_error &ex) {
@@ -312,13 +307,11 @@ void ServerImpl::RunConnection (int socket, int idx)
           if (send (socket, error.data (), error.size (), 0) <= 0)
             {
               close (socket);
-              finished_workers[idx].store (true);
               return;
             }
         }
         command_str = command_str.substr (size_to_command, command_str.size() - size_to_command);
       }
-
   }
   // Thread is about to stop, remove self from list of connections
   // and it was the very last one, notify main thread
@@ -340,9 +333,7 @@ void ServerImpl::RunConnection (int socket, int idx)
       }
   }
 
-
   close (socket);
-  finished_workers[idx].store (true);
 }
 
 } // namespace Blocking

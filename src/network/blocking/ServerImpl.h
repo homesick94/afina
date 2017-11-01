@@ -43,7 +43,7 @@ protected:
     /**
      * Method is running for each connection
      */
-    void RunConnection(int socket, int idx);
+    void RunConnection(int socket);
 
 private:
     static void *RunAcceptorProxy(void *p);
@@ -88,7 +88,7 @@ struct single_worker
   ServerImpl *parent_server = nullptr;
   int socket = -1;
 
-  single_worker (ServerImpl *serv, int sock, int i) : parent_server (serv), socket (sock), idx (i)
+  single_worker (ServerImpl *serv, int sock) : parent_server (serv), socket (sock)
   {
   }
 };
