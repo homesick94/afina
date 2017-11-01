@@ -6,6 +6,7 @@
 #include <mutex>
 #include <pthread.h>
 #include <unordered_set>
+#include <map>
 
 #include <afina/network/Server.h>
 
@@ -48,6 +49,8 @@ protected:
 private:
     static void *RunAcceptorProxy(void *p);
     static void *RunConnectionProxy(void *p);
+
+    void run_parser (int socket);
     // Atomic flag to notify threads when it is time to stop. Note that
     // flag must be atomic in order to safely publish changes cross thread
     // bounds
@@ -68,6 +71,7 @@ private:
 
     // Mutex used to access connections list
     std::mutex connections_mutex;
+    std::mutex sock_mutex;
 
     // Conditional variable used to notify waiters about empty
     // connections list
@@ -79,7 +83,7 @@ private:
     std::unordered_set<pthread_t> connections;
 
     std::vector<bool> finished_workers;
-    std::vector<single_worker> connection_workers;
+    std::map<pthread_t, int> connection_workers;
 };
 
 // struct for pthread

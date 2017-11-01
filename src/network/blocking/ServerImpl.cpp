@@ -47,6 +47,11 @@ void *ServerImpl::RunConnectionProxy (void *p)
   }
 }
 
+void ServerImpl::run_parser(int socket)
+{
+
+}
+
 // See Server.h
 ServerImpl::ServerImpl(std::shared_ptr<Afina::Storage> ps) : Server(ps) {}
 
@@ -179,8 +184,6 @@ void ServerImpl::RunAcceptor() {
     for (int i = 0; i < max_workers; i++)
       finished_workers.push_back (true);
 
-    connection_workers.reserve (max_workers);
-
     while (running.load()) {
         std::cout << "network debug: waiting for connection..." << std::endl;
 
@@ -193,27 +196,30 @@ void ServerImpl::RunAcceptor() {
 
         // TODO: Start new thread and process data from/to connection
         {
-          if (connections.size () == max_workers)
+          std::unique_lock<std::mutex> __lock(connections_mutex);
+          if (connections.size() >= max_workers)
             {
-              std::string msg = "All workers are busy";
-              if (send(client_socket, msg.data(), msg.size(), 0) <= 0) {
+              std::string msg = "ERROR\r\n";
+              if (send(client_socket, msg.data(), msg.size(), 0) <= 0)
+                {
                   close(client_socket);
                   close(server_socket);
                   throw std::runtime_error("Socket send() failed");
-              }
-              close (client_socket);
+                }
+              close(client_socket);
+              continue;
             }
           else
             {
+              std::unique_lock<std::mutex> __lock(sock_mutex);
               pthread_t new_worker_thread;
 
-              single_worker worker (this, client_socket);
               // init thread for worker
-              if (pthread_create(&new_worker_thread, NULL, ServerImpl::RunConnectionProxy,
-                                 &worker) < 0)
+              if (pthread_create(&new_worker_thread, NULL, ServerImpl::RunConnectionProxy, this) < 0)
                 {
                   throw std::runtime_error("Cannot create thread for worker");
                 }
+              connection_workers[new_worker_thread] = single_worker (this, client_socket);
             }
         }
       }
@@ -229,7 +235,7 @@ void ServerImpl::RunAcceptor() {
 }
 
 // See Server.h
-void ServerImpl::RunConnection (int socket)
+void ServerImpl::RunConnection ()
 {
   std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
   pthread_t self = pthread_self();
@@ -243,6 +249,7 @@ void ServerImpl::RunConnection (int socket)
   {
     // TODO: All connection work is here
     Protocol::Parser parser;
+    int socket = connection_workers[self];
     while (running.load ())
       {
         parser.Reset ();
