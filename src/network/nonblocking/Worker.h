@@ -3,6 +3,9 @@
 
 #include <memory>
 #include <pthread.h>
+#include <atomic>
+#include <netinet/in.h>
+#include <afina/Storage.h>
 
 namespace Afina {
 
@@ -20,6 +23,11 @@ namespace NonBlocking {
 class Worker {
 public:
     Worker(std::shared_ptr<Afina::Storage> ps);
+
+    Worker(const Worker&) = delete;
+    Worker& operator=(const Worker&) = delete;
+    Worker& operator=(const Worker&) volatile = delete;
+
     ~Worker();
 
     /**
@@ -27,7 +35,7 @@ public:
      * socket. Once connection accepted it must be registered and being processed
      * on this thread
      */
-    void Start(int server_socket);
+    void Start(sockaddr_in &server_addr);
 
     /**
      * Signal background thread to stop. After that signal thread must stop to
@@ -43,14 +51,27 @@ public:
      */
     void Join();
 
+    /**
+     * Read command and execute
+     */
+    void run_parser (int socket);
+
+    static void *RunProxy (void *p);
+
 protected:
     /**
      * Method executing by background thread
      */
-    void OnRun(void *args);
+    void OnRun(int sfd);
 
 private:
     pthread_t thread;
+
+    std::atomic<bool> running;
+
+    int serv_socket;
+
+    std::shared_ptr<Afina::Storage> storage;
 };
 
 } // namespace NonBlocking

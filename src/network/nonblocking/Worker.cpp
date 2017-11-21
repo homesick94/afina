@@ -8,52 +8,21 @@
 
 #include "Utils.h"
 
+#include <unistd.h>
+#include <sys/stat.h>
+
+#include <netdb.h>
+#include <protocol/Parser.h>
+#include <afina/execute/Command.h>
+
+#define MAX_EVENTS 10
+
 namespace Afina {
 namespace Network {
 namespace NonBlocking {
 
-//static int create_and_bind(char *port) {
-//  struct addrinfo hints;
-//  struct addrinfo *result, *rp;
-//  int s, sfd;
-
-//  memset (&hints, 0, sizeof(struct addrinfo));
-//  hints.ai_family = AF_UNSPEC;     /* Return IPv4 and IPv6 choices */
-//  hints.ai_socktype = SOCK_STREAM; /* We want a TCP socket */
-//  hints.ai_flags = AI_PASSIVE;     /* All interfaces */
-
-//  s = getaddrinfo(NULL, port, &hints, &result);
-//  if (s != 0) {
-//      fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(s));
-//      return -1;
-//    }
-
-//  for (rp = result; rp != NULL; rp = rp->ai_next) {
-//      sfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-//      if (sfd == -1)
-//        continue;
-
-//      s = bind(sfd, rp->ai_addr, rp->ai_addrlen);
-//      if (s == 0) {
-//          /* We managed to bind successfully! */
-//          break;
-//        }
-
-//      close(sfd);
-//    }
-
-//  if (rp == NULL) {
-//      fprintf(stderr, "Could not bind\n");
-//      return -1;
-//    }
-
-//  freeaddrinfo(result);
-
-//  return sfd;
-//}
-
 // See Worker.h
-Worker::Worker(std::shared_ptr<Afina::Storage> ps) {
+Worker::Worker(std::shared_ptr<Afina::Storage> ps) : running(false), storage (ps) {
     // TODO: implementation here
 }
 
@@ -62,150 +31,58 @@ Worker::~Worker() {
     // TODO: implementation here
 }
 
+
+void *Worker::RunProxy(void *p) {
+    Worker *srv = reinterpret_cast<Worker *>(p);
+    try {
+        srv->OnRun(srv->serv_socket);
+    } catch (std::runtime_error &ex) {
+        std::cerr << "Server fails: " << ex.what() << std::endl;
+    }
+    return 0;
+}
+
 // See Worker.h
-void Worker::Start(int server_socket) {
+void Worker::Start(sockaddr_in &server_addr) {
   std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
   // TODO: implementation here
-//  sfd = create_and_bind(server_socket);
-//  if (sfd == -1)
-//    abort();
 
-//  s = make_socket_non_blocking(sfd);
-//  if (s == -1)
-//    abort();
+  std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
+  running.store(true);
 
-//  s = listen(sfd, SOMAXCONN);
-//  if (s == -1) {
-//      perror("listen");
-//      abort();
-//    }
+  serv_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (serv_socket == -1) {
+      throw std::runtime_error("Failed to open socket");
+    }
 
-//  efd = epoll_create1(0);
-//  if (efd == -1) {
-//      perror("epoll_create");
-//      abort();
-//    }
+  int opts = 1;
+  if (setsockopt(serv_socket, SOL_SOCKET, SO_REUSEADDR, &opts, sizeof(opts)) == -1) {
+      close(serv_socket);
+      throw std::runtime_error("Socket setsockopt() failed");
+    }
+#ifdef SO_REUSEPORT
+  if (setsockopt(serv_socket, SOL_SOCKET, SO_REUSEPORT, &opts, sizeof(opts)) == -1) {
+      close(serv_socket);
+      throw std::runtime_error("Socket setsockopt() failed");
+    }
+#endif
 
-//  event.data.fd = sfd;
-//  event.events = EPOLLIN | EPOLLET;
-//  s = epoll_ctl(efd, EPOLL_CTL_ADD, sfd, &event);
-//  if (s == -1) {
-//      perror("epoll_ctl");
-//      abort();
-//    }
+  if (bind(serv_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1) {
+      std::cout << errno;
+      close(serv_socket);
+      throw std::runtime_error("Socket bind() failed");
+    }
 
-//  /* Buffer where events are returned */
-//  events = calloc(MAXEVENTS, sizeof event);
+  make_socket_non_blocking(serv_socket);
 
-//  /* The event loop */
-//  while (1) {
-//      int n, i;
+  if (listen(serv_socket, 5) == -1) {
+      close(serv_socket);
+      throw std::runtime_error("Socket listen() failed");
+    }
 
-//      n = epoll_wait(efd, events, MAXEVENTS, -1);
-//      for (i = 0; i < n; i++) {
-//          if ((events[i].events & EPOLLERR) || (events[i].events & EPOLLHUP) || (!(events[i].events & EPOLLIN))) {
-//              /* An error has occured on this fd, or the socket is not
-//                   ready for reading (why were we notified then?) */
-//              fprintf(stderr, "epoll error\n");
-//              close(events[i].data.fd);
-//              continue;
-//            }
-
-//          else if (sfd == events[i].data.fd) {
-//              /* We have a notification on the listening socket, which
-//                   means one or more incoming connections. */
-//              while (1) {
-//                  struct sockaddr in_addr;
-//                  socklen_t in_len;
-//                  int infd;
-//                  char hbuf[NI_MAXHOST], sbuf[NI_MAXSERV];
-
-//                  in_len = sizeof in_addr;
-//                  infd = accept(sfd, &in_addr, &in_len);
-//                  if (infd == -1) {
-//                      if ((errno == EAGAIN) || (errno == EWOULDBLOCK)) {
-//                          /* We have processed all incoming
-//                               connections. */
-//                          break;
-//                        } else {
-//                          perror("accept");
-//                          break;
-//                        }
-//                    }
-
-//                  s = getnameinfo(&in_addr, in_len, hbuf, sizeof hbuf, sbuf, sizeof sbuf,
-//                                  NI_NUMERICHOST | NI_NUMERICSERV);
-//                  if (s == 0) {
-//                      printf("Accepted connection on descriptor %d "
-//                             "(host=%s, port=%s)\n",
-//                             infd, hbuf, sbuf);
-//                    }
-
-//                  /* Make the incoming socket non-blocking and add it to the
-//                       list of fds to monitor. */
-//                  s = make_socket_non_blocking(infd);
-//                  if (s == -1)
-//                    abort();
-
-//                  event.data.fd = infd;
-//                  event.events = EPOLLIN | EPOLLET;
-//                  s = epoll_ctl(efd, EPOLL_CTL_ADD, infd, &event);
-//                  if (s == -1) {
-//                      perror("epoll_ctl");
-//                      abort();
-//                    }
-//                }
-//              continue;
-//            } else {
-//              /* We have data on the fd waiting to be read. Read and
-//                   display it. We must read whatever data is available
-//                   completely, as we are running in edge-triggered mode
-//                   and won't get a notification again for the same
-//                   data. */
-//              int done = 0;
-
-//              while (1) {
-//                  ssize_t count;
-//                  char buf[512];
-
-//                  count = read(events[i].data.fd, buf, sizeof buf);
-//                  if (count == -1) {
-//                      /* If errno == EAGAIN, that means we have read all
-//                           data. So go back to the main loop. */
-//                      if (errno != EAGAIN) {
-//                          perror("read");
-//                          done = 1;
-//                        }
-//                      break;
-//                    } else if (count == 0) {
-//                      /* End of file. The remote has closed the
-//                           connection. */
-//                      done = 1;
-//                      break;
-//                    }
-
-//                  /* Write the buffer to standard output */
-//                  s = write(1, buf, count);
-//                  if (s == -1) {
-//                      perror("write");
-//                      abort();
-//                    }
-//                }
-
-//              if (done) {
-//                  printf("Closed connection on descriptor %d\n", events[i].data.fd);
-
-//                  /* Closing the descriptor will make epoll remove it
-//                       from the set of descriptors which are monitored. */
-//                  close(events[i].data.fd);
-//                }
-//            }
-//        }
-//    }
-
-//  free(events);
-
-//  close(sfd);
+  if (pthread_create(&thread, NULL, Worker::RunProxy, this) < 0) {
+      throw std::runtime_error("Could not create worker thread");
+    }
 }
 
 // See Worker.h
@@ -221,7 +98,7 @@ void Worker::Join() {
 }
 
 // See Worker.h
-void Worker::OnRun(void *args) {
+void Worker::OnRun(int sfd) {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
 
     // TODO: implementation here
@@ -234,7 +111,232 @@ void Worker::OnRun(void *args) {
     //
     // Do not forget to use EPOLLEXCLUSIVE flag when register socket
     // for events to avoid thundering herd type behavior.
+
+    int s;
+    int efd;
+    struct epoll_event event;
+    struct epoll_event events[MAX_EVENTS];
+
+    make_socket_non_blocking(sfd);
+
+    s = listen(sfd, SOMAXCONN);
+    if (s == -1) {
+        perror("listen");
+        abort();
+    }
+
+    efd = epoll_create1(0);
+    if (efd == -1) {
+        perror("epoll_create");
+        abort();
+    }
+
+    event.data.fd = sfd;
+    event.events = EPOLLIN | EPOLLET;
+    s = epoll_ctl(efd, EPOLL_CTL_ADD, sfd, &event);
+    if (s == -1) {
+        perror("epoll_ctl");
+        abort();
+    }
+
+    /* The event loop */
+    while (running.load()) {
+        int n, i;
+
+        n = epoll_wait(efd, events, MAX_EVENTS, 20);
+        for (i = 0; i < n; i++) {
+            if ((events[i].events & EPOLLERR) || (events[i].events & EPOLLHUP) || (!(events[i].events & EPOLLIN))) {
+                /* An error has occured on this fd, or the socket is not
+                   ready for reading (why were we notified then?) */
+                fprintf(stderr, "epoll error\n");
+                close(events[i].data.fd);
+                continue;
+            }
+
+            else if (sfd == events[i].data.fd) {
+                /* We have a notification on the listening socket, which
+                   means one or more incoming connections. */
+                while (1) {
+                    struct sockaddr in_addr;
+                    socklen_t in_len;
+                    int infd;
+                    char hbuf[NI_MAXHOST], sbuf[NI_MAXSERV];
+
+                    in_len = sizeof in_addr;
+                    infd = accept(sfd, &in_addr, &in_len);
+                    if (infd == -1) {
+                        if ((errno == EAGAIN) || (errno == EWOULDBLOCK)) {
+                            /* We have processed all incoming
+                               connections. */
+                            break;
+                        } else {
+                            perror("accept");
+                            break;
+                        }
+                    }
+
+                    s = getnameinfo(&in_addr, in_len, hbuf, sizeof hbuf, sbuf, sizeof sbuf,
+                                    NI_NUMERICHOST | NI_NUMERICSERV);
+                    if (s == 0) {
+                        printf("Accepted connection on descriptor %d "
+                               "(host=%s, port=%s)\n",
+                               infd, hbuf, sbuf);
+                    }
+
+                    /* Make the incoming socket non-blocking and add it to the
+                       list of fds to monitor. */
+                    make_socket_non_blocking(infd);
+                    if (s == -1)
+                        abort();
+
+                    event.data.fd = infd;
+                    event.events = EPOLLIN | EPOLLET;
+                    s = epoll_ctl(efd, EPOLL_CTL_ADD, infd, &event);
+                    if (s == -1) {
+                        perror("epoll_ctl");
+                        abort();
+                    }
+                }
+                continue;
+            } else {
+                /* We have data on the fd waiting to be read. Read and
+                   display it. We must read whatever data is available
+                   completely, as we are running in edge-triggered mode
+                   and won't get a notification again for the same
+                   data. */
+                int done = 0;
+
+                while (1) {
+                    ssize_t count;
+                    char buf[512];
+
+                    count = read(events[i].data.fd, buf, sizeof buf);
+                    if (count == -1) {
+                        /* If errno == EAGAIN, that means we have read all
+                           data. So go back to the main loop. */
+                        if (errno != EAGAIN) {
+                            perror("read");
+                            done = 1;
+                        }
+                        break;
+                    } else if (count == 0) {
+                        /* End of file. The remote has closed the
+                           connection. */
+                        done = 1;
+                        break;
+                    }
+
+                    /* Write the buffer to standard output */
+                    s = write(1, buf, count);
+                    if (s == -1) {
+                        perror("write");
+                        abort();
+                    }
+                }
+
+                if (done) {
+                    printf("Closed connection on descriptor %d\n", events[i].data.fd);
+
+                    /* Closing the descriptor will make epoll remove it
+                       from the set of descriptors which are monitored. */
+                    close(events[i].data.fd);
+                }
+            }
+        }
+    }
+
+    close(sfd);
 }
+
+void Worker::run_parser (int socket)
+{
+  int buf_len = 1024;
+  char buf[buf_len];
+  std::string command_str;
+
+  Protocol::Parser pr;
+  while (running.load())
+    {
+      size_t parsed = 0;
+      size_t prev_parsed = 0;
+      pr.Reset();
+
+      bool was_parsed = false;
+      while (!was_parsed)
+        {
+          int res = read (socket, buf, buf_len);
+          if (res < 0)
+            {
+              close (socket);
+              return;
+            }
+
+          if (res == 0 && command_str.size() == 0)
+            {
+              close(socket);
+              return;
+            }
+
+          command_str += std::string(buf, res);
+          if (command_str.size() >= 2 && command_str[0] == '\r' && command_str[1] == '\n')
+            command_str = command_str.substr(2, command_str.size() - 2);
+
+          try {
+            was_parsed = pr.Parse(command_str, parsed);
+          } catch (std::runtime_error &ex) {
+            std::string error = std::string("SERVER_ERROR ") + ex.what() + "\n";
+            if (send(socket, error.data(), error.size(), 0) <= 0)
+              {
+                close(socket);
+                return;
+              }
+
+            close(socket);
+            return;
+          }
+
+          command_str = command_str.substr (parsed - prev_parsed, command_str.size() - parsed + prev_parsed);
+          prev_parsed = parsed;
+        }
+
+      uint32_t command_size = 0;
+      std::unique_ptr<Execute::Command> command = pr.Build(command_size);
+      while (command_str.size() < command_size)
+        {
+          int res = recv(socket, buf, buf_len, 0);
+          if (res < 0)
+            {
+              close(socket);
+              return;
+            }
+          command_str += std::string(buf, res);
+        }
+
+      std::string out;
+
+      try {
+        command->Execute(*storage, command_str.substr(0, command_size), out);
+        out += "\r\n";
+        if (send(socket, out.data(), out.size(), 0) <= 0)
+          {
+            close(socket);
+            return;
+          }
+
+      } catch (std::runtime_error &ex) {
+        std::string error = std::string("SERVER_ERROR ") + ex.what() + "\n";
+        if (send(socket, error.data(), error.size(), 0) <= 0)
+          {
+            close(socket);
+            return;
+          }
+      }
+      command_str = command_str.substr (command_size, command_str.size() - command_size);
+    }
+
+  close(socket);
+}
+
 
 } // namespace NonBlocking
 } // namespace Network
