@@ -244,14 +244,6 @@ std::string Worker::run_parser (std::string buf_in, int sock) {
 
   std::string buf = buf_in;
 
-  auto cut_buf = [](std::string &buf) {
-    size_t first_symbol = buf.find_first_not_of("\n\r");
-    if (first_symbol != std::string::npos)
-      buf = buf.substr(first_symbol, buf.size() - first_symbol);
-    else
-      buf = "";
-  };
-
   while (buf.size()) {
 
       Protocol::Parser pr;
@@ -260,7 +252,11 @@ std::string Worker::run_parser (std::string buf_in, int sock) {
       size_t parsed = 0;
       bool was_parsed = false;
 
-      cut_buf(buf);
+      size_t first_symbol = buf.find_first_not_of("\r\n");
+      if (first_symbol != std::string::npos)
+        buf = buf.substr(first_symbol, buf.size() - first_symbol);
+      else
+        buf = "";
 
       try {
         was_parsed = pr.Parse(buf, parsed);
@@ -279,14 +275,7 @@ std::string Worker::run_parser (std::string buf_in, int sock) {
       uint32_t body_size = 0;
       std::unique_ptr<Execute::Command> command = pr.Build(body_size);
 
-      std::string prev = buf;
       buf = buf.substr(parsed, buf.size() - parsed);
-
-      cut_buf(buf);
-
-      if (buf.size() < body_size) {
-          return prev;
-        }
 
       std::string out;
       try {
@@ -305,8 +294,6 @@ std::string Worker::run_parser (std::string buf_in, int sock) {
       }
 
       buf = buf.substr(body_size, buf.size() - body_size);
-
-      cut_buf(buf);
     }
 
   return buf;
