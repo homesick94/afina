@@ -89,6 +89,7 @@ void Worker::Start(sockaddr_in &server_addr) {
 void Worker::Stop() {
     std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
     // TODO: implementation here
+    running.store(false);
 }
 
 // See Worker.h
@@ -114,16 +115,8 @@ void Worker::OnRun(int sfd) {
 
     int s;
     int efd;
-    struct epoll_event event;
-    struct epoll_event events[MAX_EVENTS];
-
-    make_socket_non_blocking(sfd);
-
-    s = listen(sfd, SOMAXCONN);
-    if (s == -1) {
-        perror("listen");
-        abort();
-    }
+    epoll_event event;
+    epoll_event events[MAX_EVENTS];
 
     efd = epoll_create1(0);
     if (efd == -1) {
@@ -132,7 +125,7 @@ void Worker::OnRun(int sfd) {
     }
 
     event.data.fd = sfd;
-    event.events = EPOLLIN | EPOLLET;
+    event.events = EPOLLIN;
     s = epoll_ctl(efd, EPOLL_CTL_ADD, sfd, &event);
     if (s == -1) {
         perror("epoll_ctl");
@@ -143,7 +136,7 @@ void Worker::OnRun(int sfd) {
     while (running.load()) {
         int n, i;
 
-        n = epoll_wait(efd, events, MAX_EVENTS, 20);
+        n = epoll_wait(efd, events, MAX_EVENTS, 0);
         for (i = 0; i < n; i++) {
             if ((events[i].events & EPOLLERR) || (events[i].events & EPOLLHUP) || (!(events[i].events & EPOLLIN))) {
                 /* An error has occured on this fd, or the socket is not
@@ -226,12 +219,8 @@ void Worker::OnRun(int sfd) {
                         break;
                     }
 
-                    /* Write the buffer to standard output */
-                    s = write(1, buf, count);
-                    if (s == -1) {
-                        perror("write");
-                        abort();
-                    }
+                    auto input_string = sock_buf_mapping[events[i].data.fd] + std::string(buf, count);
+                    sock_buf_mapping[events[i].data.fd] = run_parser (input_string, events[i].data.fd);
                 }
 
                 if (done) {
@@ -240,101 +229,87 @@ void Worker::OnRun(int sfd) {
                     /* Closing the descriptor will make epoll remove it
                        from the set of descriptors which are monitored. */
                     close(events[i].data.fd);
+                    sock_buf_mapping[events[i].data.fd] = "";
                 }
             }
         }
     }
 
+    std::cout << "Closing..." << std::endl;
     close(sfd);
 }
 
-void Worker::run_parser (int socket)
-{
-  int buf_len = 1024;
-  char buf[buf_len];
-  std::string command_str;
+std::string Worker::run_parser (std::string buf_in, int sock) {
+  std::cout << "network debug: " << __PRETTY_FUNCTION__ << std::endl;
 
-  Protocol::Parser pr;
-  while (running.load())
-    {
-      size_t parsed = 0;
-      size_t prev_parsed = 0;
+  std::string buf = buf_in;
+
+  auto cut_buf = [](std::string &buf) {
+    size_t first_symbol = buf.find_first_not_of("\n\r");
+    if (first_symbol != std::string::npos)
+      buf = buf.substr(first_symbol, buf.size() - first_symbol);
+    else
+      buf = "";
+  };
+
+  while (buf.size()) {
+
+      Protocol::Parser pr;
       pr.Reset();
 
+      size_t parsed = 0;
       bool was_parsed = false;
-      while (!was_parsed)
-        {
-          int res = read (socket, buf, buf_len);
-          if (res < 0)
-            {
-              close (socket);
-              return;
-            }
 
-          if (res == 0 && command_str.size() == 0)
-            {
-              close(socket);
-              return;
-            }
+      cut_buf(buf);
 
-          command_str += std::string(buf, res);
-          if (command_str.size() >= 2 && command_str[0] == '\r' && command_str[1] == '\n')
-            command_str = command_str.substr(2, command_str.size() - 2);
-
-          try {
-            was_parsed = pr.Parse(command_str, parsed);
-          } catch (std::runtime_error &ex) {
-            std::string error = std::string("SERVER_ERROR ") + ex.what() + "\n";
-            if (send(socket, error.data(), error.size(), 0) <= 0)
-              {
-                close(socket);
-                return;
-              }
-
-            close(socket);
-            return;
+      try {
+        was_parsed = pr.Parse(buf, parsed);
+      } catch (std::runtime_error &ex) {
+        std::string error = std::string("SERVER_ERROR ") + ex.what() + "\n";
+        if (send(sock, error.data(), error.size(), 0) <= 0) {
+            close(sock);
           }
+        return "";
+      }
 
-          command_str = command_str.substr (parsed - prev_parsed, command_str.size() - parsed + prev_parsed);
-          prev_parsed = parsed;
+      if (!was_parsed) {
+          return buf;
         }
 
-      uint32_t command_size = 0;
-      std::unique_ptr<Execute::Command> command = pr.Build(command_size);
-      while (command_str.size() < command_size)
-        {
-          int res = recv(socket, buf, buf_len, 0);
-          if (res < 0)
-            {
-              close(socket);
-              return;
-            }
-          command_str += std::string(buf, res);
+      uint32_t body_size = 0;
+      std::unique_ptr<Execute::Command> command = pr.Build(body_size);
+
+      std::string prev = buf;
+      buf = buf.substr(parsed, buf.size() - parsed);
+
+      cut_buf(buf);
+
+      if (buf.size() < body_size) {
+          return prev;
         }
 
       std::string out;
-
       try {
-        command->Execute(*storage, command_str.substr(0, command_size), out);
+        command->Execute(*storage, buf.substr(0, body_size), out);
         out += "\r\n";
-        if (send(socket, out.data(), out.size(), 0) <= 0)
-          {
-            close(socket);
-            return;
+        if (send(sock, out.data(), out.size(), 0) <= 0) {
+            close(sock);
+            return "";
           }
-
       } catch (std::runtime_error &ex) {
         std::string error = std::string("SERVER_ERROR ") + ex.what() + "\n";
-        if (send(socket, error.data(), error.size(), 0) <= 0)
-          {
-            close(socket);
-            return;
+        if (send(sock, error.data(), error.size(), 0) <= 0) {
+            close(sock);
           }
+        return "";
       }
-      command_str = command_str.substr (command_size, command_str.size() - command_size);
+
+      buf = buf.substr(body_size, buf.size() - body_size);
+
+      cut_buf(buf);
     }
 
-  close(socket);
+  return buf;
 }
 
 

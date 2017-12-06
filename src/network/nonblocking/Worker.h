@@ -6,6 +6,7 @@
 #include <atomic>
 #include <netinet/in.h>
 #include <afina/Storage.h>
+#include <map>
 
 namespace Afina {
 
@@ -54,7 +55,7 @@ public:
     /**
      * Read command and execute
      */
-    void run_parser (int socket);
+    std::string run_parser(std::string inc_buf, int socket);
 
     static void *RunProxy (void *p);
 
@@ -72,6 +73,8 @@ private:
     int serv_socket;
 
     std::shared_ptr<Afina::Storage> storage;
+
+     std::map <int, std::string> sock_buf_mapping;
 };
 
 } // namespace NonBlocking
