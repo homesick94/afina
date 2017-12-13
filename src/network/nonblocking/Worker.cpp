@@ -12,7 +12,6 @@
 #include <sys/stat.h>
 
 #include <netdb.h>
-#include <protocol/Parser.h>
 #include <afina/execute/Command.h>
 
 #define MAX_EVENTS 10
@@ -56,17 +55,18 @@ void Worker::Start(sockaddr_in &server_addr) {
     }
 
   int opts = 1;
+
   if (setsockopt(serv_socket, SOL_SOCKET, SO_REUSEADDR, &opts, sizeof(opts)) == -1) {
       close(serv_socket);
       throw std::runtime_error("Socket setsockopt() failed");
     }
 
-//#ifdef SO_REUSEPORT
-//  if (setsockopt(serv_socket, SOL_SOCKET, SO_REUSEPORT, &opts, sizeof(opts)) == -1) {
-//      close(serv_socket);
-//      throw std::runtime_error("Socket setsockopt() failed");
-//    }
-//#endif
+#ifdef SO_REUSEPORT
+  if (setsockopt(serv_socket, SOL_SOCKET, SO_REUSEPORT, &opts, sizeof(opts)) == -1) {
+      close(serv_socket);
+      throw std::runtime_error("Socket setsockopt() failed");
+    }
+#endif
 
   if (bind(serv_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1) {
       close(serv_socket);
@@ -215,23 +215,24 @@ void Worker::OnRun(int sfd) {
                     } else if (count == 0) {
                         /* End of file. The remote has closed the
                            connection. */
-                        done = 1;
+                        done = 2;
                         break;
                     }
 
-                    auto input_string = sock_buf_mapping[events[i].data.fd] + std::string(buf, count);
-                    // do not use this
-                    sock_buf_mapping[events[i].data.fd] = run_parser (input_string, events[i].data.fd);
+                    auto input_string = sock_buffer + std::string(buf, count);
+                    sock_buffer = run_parser (input_string, events[i].data.fd);
                 }
 
-                if (done) {
+                if (done == 2) {
                     printf("Closed connection on descriptor %d\n", events[i].data.fd);
 
                     /* Closing the descriptor will make epoll remove it
                        from the set of descriptors which are monitored. */
                     close(events[i].data.fd);
-                    sock_buf_mapping[events[i].data.fd] = "";
+                    sock_buffer = "";
                 }
+                else if (done == 1)
+                  break; // go to main loop
             }
         }
     }
@@ -246,9 +247,7 @@ std::string Worker::run_parser (std::string buf_in, int sock) {
   std::string buf = buf_in;
 
   while (buf.size()) {
-
-      Protocol::Parser pr;
-//      pr.Reset();
+      parser.Reset();
 
       size_t parsed = 0;
       bool was_parsed = false;
@@ -260,7 +259,7 @@ std::string Worker::run_parser (std::string buf_in, int sock) {
         buf = "";
 
       try {
-        was_parsed = pr.Parse(buf, parsed);
+        was_parsed = parser.Parse(buf, parsed);
       } catch (std::runtime_error &ex) {
         std::string error = std::string("SERVER_ERROR ") + ex.what() + "\n";
         if (send(sock, error.data(), error.size(), 0) <= 0) {
@@ -274,7 +273,7 @@ std::string Worker::run_parser (std::string buf_in, int sock) {
         }
 
       uint32_t body_size = 0;
-      std::unique_ptr<Execute::Command> command = pr.Build(body_size);
+      std::unique_ptr<Execute::Command> command = parser.Build(body_size);
 
       buf = buf.substr(parsed, buf.size() - parsed);
 

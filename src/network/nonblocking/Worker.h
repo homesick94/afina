@@ -7,6 +7,7 @@
 #include <netinet/in.h>
 #include <afina/Storage.h>
 #include <map>
+#include <protocol/Parser.h>
 
 namespace Afina {
 
@@ -74,7 +75,9 @@ private:
 
     std::shared_ptr<Afina::Storage> storage;
 
-     std::map <int, std::string> sock_buf_mapping;
+    Protocol::Parser parser;
+
+    std::string sock_buffer = "";
 };
 
 } // namespace NonBlocking
