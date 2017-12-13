@@ -60,15 +60,15 @@ void Worker::Start(sockaddr_in &server_addr) {
       close(serv_socket);
       throw std::runtime_error("Socket setsockopt() failed");
     }
-#ifdef SO_REUSEPORT
-  if (setsockopt(serv_socket, SOL_SOCKET, SO_REUSEPORT, &opts, sizeof(opts)) == -1) {
-      close(serv_socket);
-      throw std::runtime_error("Socket setsockopt() failed");
-    }
-#endif
+
+//#ifdef SO_REUSEPORT
+//  if (setsockopt(serv_socket, SOL_SOCKET, SO_REUSEPORT, &opts, sizeof(opts)) == -1) {
+//      close(serv_socket);
+//      throw std::runtime_error("Socket setsockopt() failed");
+//    }
+//#endif
 
   if (bind(serv_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1) {
-      std::cout << errno;
       close(serv_socket);
       throw std::runtime_error("Socket bind() failed");
     }
@@ -220,6 +220,7 @@ void Worker::OnRun(int sfd) {
                     }
 
                     auto input_string = sock_buf_mapping[events[i].data.fd] + std::string(buf, count);
+                    // do not use this
                     sock_buf_mapping[events[i].data.fd] = run_parser (input_string, events[i].data.fd);
                 }
 
@@ -247,7 +248,7 @@ std::string Worker::run_parser (std::string buf_in, int sock) {
   while (buf.size()) {
 
       Protocol::Parser pr;
-      pr.Reset();
+//      pr.Reset();
 
       size_t parsed = 0;
       bool was_parsed = false;
